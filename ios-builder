@@ -1,0 +1,126 @@
+#!/usr/bin/env php
+<?php
+require_once 'Console/ProgressBar.php';
+define('CONFIG_PATH', dirname(__FILE__) . '/');
+define('DATA_PATH', dirname(__FILE__) . '/data/');
+define('LOGS_PATH', dirname(__FILE__) . '/logs/');
+$session = sha1(microtime());
+
+$cwd = getcwd();
+if ($argc < 2) die("Not target set\n");
+
+$target = $argv[1];
+$config = file_get_contents(CONFIG_PATH . 'data.json');
+if (empty($config)) die("No config set\n");
+$targets = json_decode($config, true);
+if (empty($targets)) die("Invalid config\n");
+if (!isset($targets[$target])) die("Invalid target\n");
+
+$data = @file_get_contents(DATA_PATH . $target . '.json');
+if ($data) $target_data = json_decode($data, true);
+else $target_data = array();
+
+$options = $targets[$target];
+if (!chdir($options['path'])) die("Unable to chdir to '" . $options['path'] . "'\n");
+
+$notes = '';
+switch ($options['repository-type']) {
+    case 'subversion':
+        echo "Updating repository...\n";
+        $up = shell_exec('svn update --non-interactive');
+        file_put_contents(LOGS_PATH . 'svn-update.' . $session . '.log', $up);
+        if (preg_match('/At revision (\d+)\.\n$/', $up, $matches) == 0) {
+            die("Unable to update repository\n");
+        }
+        $revision = $matches[1];
+        if ($options['allow-dirty-upload'] == FALSE) {
+            $st = shell_exec('svn status --non-interactive --xml');
+            file_put_contents(LOGS_PATH . 'svn-status.' . $session . '.log', $st);
+            $xml = new DOMDocument();
+            if (!$xml->loadXML($st)) die("Bad-formed xml running 'svn st --non-interactive --xml'\n");
+            $xpath = new DOMXPath($xml);
+            $query = $xpath->query('//status/target/entry/wc-status[@item="modified"]');
+            if ($query->length > 0) die("Not building dirty working copy\n");
+            $query = $xpath->query('//status/target/entry/wc-status[@item="conflicted"]');
+            if ($query->length > 0) die("Not building dirty working copy\n");
+        }
+
+        echo "Checking log...\n";
+        $log = shell_exec('svn log -r' . (int)$target_data['last_revision'] . ':HEAD --xml');
+        file_put_contents(LOGS_PATH . 'svn-log.' . $session . '.log', $st);
+        $document = new DOMDocument();
+        if ($document->loadXML($log)) {
+            $xpath = new DOMXPath($document);
+            $query = $xpath->query('//log/logentry');
+            foreach ($query as $node) {
+                foreach ($node->childNodes as $child) {
+                    if ($child->nodeName == 'author') $author = $child->nodeValue;
+                    if ($child->nodeName == 'msg') $msg = $child->nodeValue;
+                }
+                $notes .= $author . ": " . $msg . "\n";
+            }
+        }
+        break;
+
+    default:
+        echo "WARNING: unrecognized repository type, using working copy\n";
+        break;
+}
+shell_exec('rm -rf build');
+
+echo "Building...\n";
+$command = 'xcodebuild  -configuration ' . escapeshellarg($options['configuration']) . ' ';
+if ($options['target']) $command .= '-target ' . escapeshellarg($options['target']);
+else $command .= '-alltargets';
+
+exec($command, $output, $return_var);
+file_put_contents(LOGS_PATH . 'xcodebuild.' . $session . '.log', $command . "\n" . implode("\n", $output));
+if ($return_var != 0) die("Failed to compile\n");
+
+echo "Making ipa...\n";
+$command = '/usr/bin/xcrun -sdk iphoneos PackageApplication -v build/Ad\ Hoc-iphoneos/*.app -o ~/Desktop/' . $target . '.ipa --embed ./adhoc.mobileprovision';
+exec($command, $output, $return_var);
+file_put_contents(LOGS_PATH . 'xcrun.' . $session . '.log', $command . "\n" . implode("\n", $output));
+if ($return_var != 0) die("Failed to create .ipa file\n");
+
+if (empty($notes)) $notes = "Notes Pending";
+
+if ($options['upload-to'] == "testflight") {
+    // ----- UPLOAD ------
+    function curl_callback($download_size, $downloaded, $upload_size, $uploaded)
+    {
+        static $bar = null;
+        static $last = -1;
+        if ($uploaded == $last) return;
+        $last = $uploaded;
+        if ($upload_size == 0) return;
+        if (!$bar) {
+            $bar = new Console_ProgressBar('* %fraction% [%bar%] %percent% ETA: %estimate%', '=>', '-', 76, $upload_size);
+        }
+        $bar->update($uploaded);
+    }
+
+    echo "Uploading...\n";
+    $ch = curl_init('http://testflightapp.com/api/builds.json');
+    curl_setopt($ch, CURLOPT_NOPROGRESS, false);
+    curl_setopt($ch, CURLOPT_PROGRESSFUNCTION, 'curl_callback');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+    curl_setopt($ch, CURLOPT_BUFFERSIZE, 128);
+    curl_setopt($ch, CURLOPT_POST, true);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, array(
+        'api_token' => $options['testflight-api-token'],
+        'team_token' => $options['testflight-team-token'],
+        'file' => '@' . $_ENV['HOME'] . '/Desktop/' . $target . '.ipa',
+        'notes' => $notes,
+        'distribution_lists' => implode(',', $options['testflight-distribution-lists']),
+        'notify' => $options['testflight-notify'] ? 'True' : 'False',
+        'replace' => $options['testflight-replace'] ? 'True' : 'False',
+    ));
+
+    $data = curl_exec($ch);
+    $return = json_decode($data, true);
+    echo "Install URL: " . $url['install_url'] . "\n";
+    echo "Config URL: " . $url['config_url'] . "\n";
+}
+
+chdir($cwd);

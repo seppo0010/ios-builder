@@ -1,0 +1,15 @@
+{
+    "repo": {
+        "path": "/path/to/project/",
+        "repository-type": "subversion",
+        "allow-dirty-upload": false,
+        "configuration": "Ad Hoc",
+        "target": null,
+        "upload-to": "testflight",
+        "testflight-team-token": "123456789asd",
+        "testflight-api-token": "qwezxc123456789asd",
+        "testflight-notify": true,
+        "testflight-replace": true,
+        "testflight-distribution-lists": ["team", "client", "me"]
+    }
+}
