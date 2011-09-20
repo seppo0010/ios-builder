@@ -118,9 +118,11 @@ if ($options['upload-to'] == "testflight") {
     ));
 
     $data = curl_exec($ch);
+    echo "\n";
+    file_put_contents(LOGS_PATH . 'test-flight.' . $session . '.log', $data);
     $return = json_decode($data, true);
-    echo "Install URL: " . $url['install_url'] . "\n";
-    echo "Config URL: " . $url['config_url'] . "\n";
+    echo "Install URL: " . $return['install_url'] . "\n";
+    echo "Config URL: " . $return['config_url'] . "\n";
 }
 
 chdir($cwd);
