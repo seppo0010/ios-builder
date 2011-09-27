@@ -6,6 +6,7 @@ define('DATA_PATH', dirname(__FILE__) . '/data/');
 define('LOGS_PATH', dirname(__FILE__) . '/logs/');
 $session = sha1(microtime());
 
+echo "Session name: " , $session , "\n";
 $cwd = getcwd();
 if ($argc < 2) die("Not target set\n");
 
